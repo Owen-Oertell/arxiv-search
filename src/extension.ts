@@ -25,13 +25,11 @@ const STOPWORDS = new Set(["a", "an", "the"]);
 function clean(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
-
 function surname(str: string) {
   return str.includes(",")
     ? str.split(",")[0].trim()
     : str.split(/\s+/)[0].trim();
 }
-
 function firstWord(title: string) {
   const words = title
     .split(/\s+/)
@@ -48,7 +46,6 @@ function bibKey(p: Paper) {
     firstWord(p.title)
   )}`;
 }
-
 function bibtex(p: Paper): { key: string; text: string } {
   const key = bibKey(p);
   const authors = p.authors.join(" and ");
@@ -67,7 +64,6 @@ function bibtex(p: Paper): { key: string; text: string } {
 `
     };
   }
-
   return {
     key,
     text: `${common}
@@ -133,20 +129,19 @@ export function activate(context: vscode.ExtensionContext) {
       async () => {
         /* 1 ─ user query */
         const query = await vscode.window.showInputBox({
-          prompt: "Search arXiv or Crossref",
+          prompt: "Search arXiv (fast) and Crossref (added when ready)",
           placeHolder: "e.g. Diffusion models, Tong 2024"
         });
         if (!query) return;
 
-        /* 2 ─ QuickPick setup */
+        /* 2 ─ QuickPick */
         const qp = vscode.window.createQuickPick<PaperPickItem>();
         qp.title = "Search results";
-        qp.placeholder = "Select a paper";
+        qp.placeholder = "Loading arXiv…";
         qp.matchOnDetail = true;
         qp.busy = true;
         qp.show();
 
-        /* helper to convert papers → items */
         const toItems = (list: Paper[]): PaperPickItem[] =>
           list.map((p) => ({
             label: p.title,
@@ -156,36 +151,44 @@ export function activate(context: vscode.ExtensionContext) {
             paper: p
           }));
 
-        /* 3 ─ fetch arXiv immediately */
+        /* 3 ─ fetch arXiv first */
         searchArxiv(query, 20)
           .then((ax) => {
             qp.items = toItems(ax);
+            qp.placeholder = "Loading Crossref…";
           })
-          .catch((e) => console.error(e))
-          .finally(() => {
-            /* we leave qp.busy true until Crossref also finishes */
+          .catch((err) => {
+            vscode.window.showErrorMessage(
+              `arXiv request failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+            qp.placeholder = "arXiv failed; loading Crossref…";
           });
 
-        /* 4 ─ fetch Crossref in parallel */
+        /* 4 ─ fetch Crossref */
         searchCrossref(query, 20)
           .then((cr) => {
             qp.items = [...qp.items, ...toItems(cr)];
           })
-          .catch((e) => console.error(e))
+          .catch((err) => console.error(err))
           .finally(() => {
-            qp.busy = false; // both tasks done
+            qp.busy = false;
+            qp.placeholder = qp.items.length
+              ? "Select a paper"
+              : "No results found";
           });
 
-        /* 5 ─ when user picks */
+        /* 5 ─ accept selection */
         qp.onDidAccept(async () => {
           const sel = qp.selectedItems[0];
           if (!sel) return;
           qp.hide();
 
-          /* 5a ─ build BibTeX */
+          /* build BibTeX */
           const { key, text } = bibtex(sel.paper);
 
-          /* 5b ─ choose/create .bib */
+          /* choose/create .bib */
           const bibFiles = await vscode.workspace.findFiles("**/*.bib");
           let bibUri: vscode.Uri;
           if (!bibFiles.length) {
@@ -210,7 +213,7 @@ export function activate(context: vscode.ExtensionContext) {
             bibUri = pickFile.uri;
           }
 
-          /* 5c ─ append & save */
+          /* append & save */
           const edit = new vscode.WorkspaceEdit();
           edit.insert(
             bibUri,
