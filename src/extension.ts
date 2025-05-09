@@ -133,7 +133,7 @@ export function activate(context: vscode.ExtensionContext) {
       async () => {
         /* 1 ─ user query */
         const query = await vscode.window.showInputBox({
-          prompt: "Search arXiv (fast) and Crossref (added when ready)",
+          prompt: "Search arXiv or Crossref",
           placeHolder: "e.g. Diffusion models, Tong 2024"
         });
         if (!query) return;

@@ -125,7 +125,7 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand("arxivBiblatex.addCitation", async () => {
         /* 1 ─ user query */
         const query = await vscode.window.showInputBox({
-            prompt: "Search arXiv (fast) and Crossref (added when ready)",
+            prompt: "Search arXiv or Crossref",
             placeHolder: "e.g. Diffusion models, Tong 2024"
         });
         if (!query)
