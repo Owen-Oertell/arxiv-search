@@ -37,133 +37,176 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const fast_xml_parser_1 = require("fast-xml-parser");
-/* ---------- Helpers ------------------------------------------------------ */
-function cleanKeyFragment(s) {
-    return s
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ""); // drop punctuation/spaces
+/* -------------------------------------------------------- key helpers */
+const STOPWORDS = new Set(["a", "an", "the"]);
+function clean(s) {
+    return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
-/**
- * Clean a string to be a valid BibTeX key fragment:
- *  - lowercase
- *  - remove non-alphanumeric characters
- */
-function entryToBib(entry) {
-    // 1) Authors → array of names
-    const authorsArr = Array.isArray(entry.author)
-        ? entry.author.map((a) => a.name)
-        : [entry.author.name];
-    // 2) Year from published date
-    const year = entry.published.slice(0, 4);
-    // 3) Surname of first author
-    const surname = authorsArr[0].split(/\s+/).pop() || authorsArr[0];
-    const cleanSurname = cleanKeyFragment(surname);
-    // 4) First significant word of title
-    const titleWords = entry.title
-        .trim()
-        .replace(/[\r\n]/g, " ")
+function surname(str) {
+    return str.includes(",")
+        ? str.split(",")[0].trim()
+        : str.split(/\s+/)[0].trim();
+}
+function firstWord(title) {
+    const words = title
         .split(/\s+/)
         .map((w) => w.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""))
-        .filter((w) => w.length > 0);
-    const firstWord = titleWords.length > 0 ? titleWords[0] : "paper";
-    const cleanFirst = cleanKeyFragment(firstWord);
-    // 5) Compose key
-    const bibKey = `${cleanSurname}${year}${cleanFirst}`;
-    // 6) ArXiv ID
-    const arxivId = entry.id.split("/abs/")[1];
-    // 7) Build the BibTeX text
-    const authorsBib = authorsArr.join(" and ");
-    const text = `@article{${bibKey},
-  title  = {${entry.title.trim().replace(/\s+/g, " ")}},
-  author = {${authorsBib}},
+        .filter(Boolean);
+    for (const w of words) {
+        if (!STOPWORDS.has(w.toLowerCase()))
+            return w;
+    }
+    return words[0] ?? "paper";
+}
+function bibKey(p) {
+    return `${clean(surname(p.authors[0] ?? "anon"))}${p.year}${clean(firstWord(p.title))}`;
+}
+function bibtex(p) {
+    const key = bibKey(p);
+    const authors = p.authors.join(" and ");
+    const common = `@article{${key},
+  title  = {${p.title}},
+  author = {${authors}},
+  year   = {${p.year}},`;
+    if (p.source === "arxiv") {
+        return {
+            key,
+            text: `${common}
   journal= {arXiv},
-  eprint = {${arxivId}},
-  year   = {${year}}
+  eprint = {${p.id}}
 }
-`;
-    return { key: bibKey, text };
+`
+        };
+    }
+    return {
+        key,
+        text: `${common}
+  journal= {${p.journal ?? "journal"}},
+  doi    = {${p.id}}
 }
-/* ---------- Extension entry points -------------------------------------- */
+`
+    };
+}
+/* ---------------------------------------------------- fetch helpers */
+async function searchArxiv(query, max = 20) {
+    const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=${max}`;
+    const xml = await (await fetch(url)).text();
+    const feed = new fast_xml_parser_1.XMLParser({ ignoreAttributes: false }).parse(xml);
+    let entries = feed.feed?.entry ?? [];
+    if (!Array.isArray(entries))
+        entries = [entries];
+    return entries.map((e) => ({
+        source: "arxiv",
+        title: e.title.trim().replace(/\s+/g, " "),
+        authors: Array.isArray(e.author)
+            ? e.author.map((a) => a.name)
+            : [e.author.name],
+        year: e.published.slice(0, 4),
+        id: e.id.split("/abs/")[1]
+    }));
+}
+async function searchCrossref(query, max = 20) {
+    const url = `https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=${max}`;
+    const json = await (await fetch(url)).json();
+    const items = json.message?.items ?? [];
+    return items.map((it) => ({
+        source: "crossref",
+        title: it.title?.[0] ?? "(untitled)",
+        authors: (it.author ?? []).map((a) => `${a.family ?? ""}, ${a.given ?? ""}`.trim()),
+        year: it.issued?.["date-parts"]?.[0]?.[0]?.toString() ??
+            it.created?.["date-parts"]?.[0]?.[0]?.toString() ??
+            "????",
+        id: it.DOI ?? "",
+        journal: it["container-title"]?.[0]
+    }));
+}
+/* ------------------------------------------------------- activate */
 function activate(context) {
-    const cmd = vscode.commands.registerCommand("arxivBiblatex.addCitation", async () => {
-        /* 1 ─ ask for a search query */
+    context.subscriptions.push(vscode.commands.registerCommand("arxivBiblatex.addCitation", async () => {
+        /* 1 ─ user query */
         const query = await vscode.window.showInputBox({
-            prompt: "Search arXiv (title / author / keywords)",
-            placeHolder: "e.g. diffusion models, Smith transformer"
+            prompt: "Search arXiv (fast) and Crossref (added when ready)",
+            placeHolder: "e.g. Diffusion models, Tong 2024"
         });
         if (!query)
             return;
-        /* 2 ─ fetch results from arXiv */
-        const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=20`;
-        let xml;
-        try {
-            const res = await fetch(url);
-            xml = await res.text();
-        }
-        catch (err) {
-            vscode.window.showErrorMessage(`arXiv request failed: ${err instanceof Error ? err.message : err}`);
-            return;
-        }
-        /* 3 ─ parse Atom XML */
-        const feed = new fast_xml_parser_1.XMLParser({ ignoreAttributes: false }).parse(xml);
-        let entries = feed.feed.entry || [];
-        if (!Array.isArray(entries))
-            entries = [entries];
-        if (entries.length === 0) {
-            vscode.window.showInformationMessage("No results found.");
-            return;
-        }
-        /* 4 ─ QuickPick UI */
-        const pick = await vscode.window.showQuickPick(entries.map((e) => {
-            const authorList = e.author instanceof Array
-                ? e.author.map((a) => a.name).join(", ")
-                : e.author.name;
-            return {
-                label: e.title.trim().replace(/\s+/g, " "),
-                detail: `${authorList} (${e.published.slice(0, 4)})`,
-                entry: e
-            };
-        }), { matchOnDetail: true, placeHolder: "Select a paper" });
-        if (!pick)
-            return;
-        /* 5 ─ build BibTeX */
-        const { key, text } = entryToBib(pick.entry);
-        /* 6 ─ choose or create .bib file */
-        const bibFiles = await vscode.workspace.findFiles("**/*.bib");
-        let bibUri;
-        if (bibFiles.length === 0) {
-            const root = vscode.workspace.workspaceFolders?.[0];
-            if (!root) {
-                vscode.window.showErrorMessage("No workspace open.");
+        /* 2 ─ QuickPick setup */
+        const qp = vscode.window.createQuickPick();
+        qp.title = "Search results";
+        qp.placeholder = "Select a paper";
+        qp.matchOnDetail = true;
+        qp.busy = true;
+        qp.show();
+        /* helper to convert papers → items */
+        const toItems = (list) => list.map((p) => ({
+            label: p.title,
+            detail: `${p.authors.join(", ")} (${p.year}) [${p.source === "arxiv" ? "arXiv" : "Crossref"}]`,
+            paper: p
+        }));
+        /* 3 ─ fetch arXiv immediately */
+        searchArxiv(query, 20)
+            .then((ax) => {
+            qp.items = toItems(ax);
+        })
+            .catch((e) => console.error(e))
+            .finally(() => {
+            /* we leave qp.busy true until Crossref also finishes */
+        });
+        /* 4 ─ fetch Crossref in parallel */
+        searchCrossref(query, 20)
+            .then((cr) => {
+            qp.items = [...qp.items, ...toItems(cr)];
+        })
+            .catch((e) => console.error(e))
+            .finally(() => {
+            qp.busy = false; // both tasks done
+        });
+        /* 5 ─ when user picks */
+        qp.onDidAccept(async () => {
+            const sel = qp.selectedItems[0];
+            if (!sel)
                 return;
+            qp.hide();
+            /* 5a ─ build BibTeX */
+            const { key, text } = bibtex(sel.paper);
+            /* 5b ─ choose/create .bib */
+            const bibFiles = await vscode.workspace.findFiles("**/*.bib");
+            let bibUri;
+            if (!bibFiles.length) {
+                const root = vscode.workspace.workspaceFolders?.[0];
+                if (!root) {
+                    vscode.window.showErrorMessage("No workspace open.");
+                    return;
+                }
+                bibUri = vscode.Uri.joinPath(root.uri, "references.bib");
+                await vscode.workspace.fs.writeFile(bibUri, Buffer.from(""));
             }
-            bibUri = vscode.Uri.joinPath(root.uri, "references.bib");
-            await vscode.workspace.fs.writeFile(bibUri, Buffer.from(""));
-        }
-        else if (bibFiles.length === 1) {
-            bibUri = bibFiles[0];
-        }
-        else {
-            const pickFile = await vscode.window.showQuickPick(bibFiles.map((f) => ({
-                label: vscode.workspace.asRelativePath(f),
-                uri: f
-            })), { placeHolder: "Select the .bib file to append" });
-            if (!pickFile)
-                return;
-            bibUri = pickFile.uri;
-        }
-        /* 7 ─ append and save */
-        const edit = new vscode.WorkspaceEdit();
-        edit.insert(bibUri, new vscode.Position(Number.MAX_VALUE, 0), "\n" + text);
-        const ok = await vscode.workspace.applyEdit(edit);
-        if (ok) {
-            await (await vscode.workspace.openTextDocument(bibUri)).save();
-            vscode.window.showInformationMessage(`Added ${key} to ${vscode.workspace.asRelativePath(bibUri)}`);
-        }
-        else {
-            vscode.window.showErrorMessage("Failed to update .bib file.");
-        }
-    });
-    context.subscriptions.push(cmd);
+            else if (bibFiles.length === 1) {
+                bibUri = bibFiles[0];
+            }
+            else {
+                const pickFile = await vscode.window.showQuickPick(bibFiles.map((f) => ({
+                    label: vscode.workspace.asRelativePath(f),
+                    uri: f
+                })), { placeHolder: "Select the .bib file to append" });
+                if (!pickFile)
+                    return;
+                bibUri = pickFile.uri;
+            }
+            /* 5c ─ append & save */
+            const edit = new vscode.WorkspaceEdit();
+            edit.insert(bibUri, new vscode.Position(Number.MAX_VALUE, 0), "\n" + text);
+            const ok = await vscode.workspace.applyEdit(edit);
+            if (ok) {
+                await (await vscode.workspace.openTextDocument(bibUri)).save();
+                vscode.window.showInformationMessage(`Added ${key} to ${vscode.workspace.asRelativePath(bibUri)}`);
+            }
+            else {
+                vscode.window.showErrorMessage("Failed to update .bib file.");
+            }
+        });
+        /* dispose on hide */
+        qp.onDidHide(() => qp.dispose());
+    }));
 }
 function deactivate() { }
