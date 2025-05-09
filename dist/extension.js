@@ -94,7 +94,7 @@ function activate(context) {
         if (!query)
             return;
         /* 2 ─ fetch results from arXiv */
-        const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=40`;
+        const url = `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=20`;
         let xml;
         try {
             const res = await fetch(url);

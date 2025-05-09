@@ -3,7 +3,7 @@
     "displayName": "arXiv → BibLaTeX",
     "description": "Search arXiv from the Command Palette and append the paper’s BibTeX entry to a .bib file.",
     "version": "0.0.1",
-    "publisher": "your-name",
+    "publisher": "Owen Oertell",
     "engines": {
       "vscode": "^1.89.0"
     },
