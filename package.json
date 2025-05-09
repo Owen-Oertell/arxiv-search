@@ -3,9 +3,13 @@
     "displayName": "arXiv → BibLaTeX",
     "description": "Search arXiv from the Command Palette and append the paper’s BibTeX entry to a .bib file.",
     "version": "0.0.1",
-    "publisher": "Owen Oertell",
+    "publisher": "owen-oertell",
     "engines": {
       "vscode": "^1.89.0"
+    },
+    "repository": {
+      "type": "git",
+      "url": "https://github.com/Owen-Oertell/arxiv-search"
     },
     "categories": ["Other"],
     "activationEvents": [
