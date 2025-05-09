@@ -1,0 +1,39 @@
+{
+    "name": "arxiv-bib-latex",
+    "displayName": "arXiv → BibLaTeX",
+    "description": "Search arXiv from the Command Palette and append the paper’s BibTeX entry to a .bib file.",
+    "version": "0.0.1",
+    "publisher": "your-name",
+    "engines": {
+      "vscode": "^1.89.0"
+    },
+    "categories": ["Other"],
+    "activationEvents": [
+      "onCommand:arxivBiblatex.addCitation"
+    ],
+    "main": "./dist/extension.js",
+    "contributes": {
+      "commands": [
+        {
+          "command": "arxivBiblatex.addCitation",
+          "title": "Add arXiv Citation"
+        }
+      ]
+    },
+    "scripts": {
+      "vscode:prepublish": "npm run compile",
+      "compile": "tsc -p ./",
+      "watch": "tsc -w -p ./",
+      "package": "npx @vscode/vsce package"
+    },
+    "dependencies": {
+      "fast-xml-parser": "^4.4.0"
+    },
+    "devDependencies": {
+      "@types/node": "^20.11.26",
+      "@vscode/vsce": "^3.3.2",
+      "typescript": "^5.4.4",
+      "@types/vscode": "^1.1.46"
+    }
+  }
+  
